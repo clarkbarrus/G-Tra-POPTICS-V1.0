@@ -12,9 +12,12 @@
 
 #include <iostream>
 #include <vector>
+#include <thrust/device_vector.h>
 
 #include "trajectory_data.cuh"
 #include "g_tra_poptics.cuh"
+#include "rtree.h"
+#include "strtree.cuh"
 
 /**
  * This macro checks return value of the CUDA runtime call and exits
@@ -34,6 +37,23 @@
  */
 int main(int argc, char **argv)
 {
+	// Thrust test:
+	size_t N = 10;
+
+	// Raw pointer to device memory
+	thrust::device_vector<int> d_vector(N);
+	thrust::fill(d_vector.begin(), d_vector.end(), (int) 5);
+
+	int sum = thrust::reduce(d_vector.begin(), d_vector.end());
+	std::cout << sum << std::endl;
+
+
+
+	// End Thrust test
+
+
+
+
 	std::string file_name = "testtrajectorydata.csv";
 	std::vector<point> host_trajectory_data;
 
@@ -56,3 +76,4 @@ int main(int argc, char **argv)
 
 	return 0;
 }
+
