@@ -10,12 +10,14 @@
 
 #include <stdlib.h>
 #include <vector>
+#include "trajectory_data.cuh"
 
 //#include "s2/base/integral_types.h"
 typedef unsigned long long  uint64; // This is the only type used by the above include.
 
 #define DIV_CEIL(x, y) (((x) + (y) - 1) / (y))
 
+const size_t THREADS_PER_BLOCK = 512;
 
 struct strtree_rect
 {
@@ -67,7 +69,7 @@ struct strtree_lines
 	size_t length;
 };
 
-#define STRTREE_NODE_SIZE         4
+#define STRTREE_NODE_SIZE         2
 //#define MAX_THREADS_PER_BLOCK   100
 
 struct strtree_node;
@@ -127,6 +129,12 @@ void findnode();
 void chooseleaf();
 void quadraticsplit();
 void adjusttree();
+
+strtree_lines points_to_lines(point* points, trajectory_index* trajectory_indices, int num_points, int num_trajectories);
+
+// Helper methods for points_to_lines
+strtree_rect points_to_bbox(point p1, point p2);
+short points_to_orientation(point p1, point p2);
 
 
 //int cpu_search(RTree_Node *N, RTree_Rect *rect, std::vector<int> &points);

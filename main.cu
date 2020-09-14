@@ -33,46 +33,33 @@
 
 /**
  *
- * Entry point for executing all of G-Tra-POPTICS
+ * Entry point for executing G-Tra-POPTICS
  */
 int main(int argc, char **argv)
 {
-	// Thrust test:
-	size_t N = 10;
-
-	// Raw pointer to device memory
-	thrust::device_vector<int> d_vector(N);
-	thrust::fill(d_vector.begin(), d_vector.end(), (int) 5);
-
-	int sum = thrust::reduce(d_vector.begin(), d_vector.end());
-	std::cout << sum << std::endl;
-
-
-
-	// End Thrust test
-
-
-
 
 	std::string file_name = "testtrajectorydata.csv";
-	std::vector<point> host_trajectory_data;
 
 	// Load trajectory data from file
-	load_trajectory_data_from_file(file_name, host_trajectory_data);
+	file_trajectory_data trajectory_data = load_trajectory_data_from_file(file_name);
 
-	// Initialize variables for G-Tra-POPTICS execution
+	// Preprocessing: build STR-tree index
+	strtree_lines lines = points_to_lines(trajectory_data.points, trajectory_data.trajectories,
+			trajectory_data.num_points, trajectory_data.num_trajectories);
+	strtree strtree = cuda_create_strtree(lines);
 
-	// Number of CPU threads executing
-	int cpu_threads = 8;
-	// Maximum epsilon at which clusters are detected
-	double epsilon = 0.2;
-	// Specific epsilon for which to find clust/ Implementationsers after minimum spanning trees are built
-	double epsilon_prime = 0.1;
-	// Minimum number of trajectories near a point for it to be considered a core point.
-	double min_num_trajectories = 2;
-
-	// Execute G-Tra-POPTICS on data file
-	g_tra_poptics(host_trajectory_data, cpu_threads, epsilon, epsilon_prime, min_num_trajectories);
+//	/* Initialize variables for G-Tra-POPTICS execution */
+//	// Number of CPU threads executing
+//	int cpu_threads = 8;
+//	// Maximum epsilon at which clusters are detected
+//	double epsilon = 0.2;
+//	// Specific epsilon for which to find clusters after minimum spanning trees are built
+//	double epsilon_prime = 0.1;
+//	// Minimum number of trajectories near a point for it to be considered a core point.
+//	double min_num_trajectories = 2;
+//
+//	// Execute G-Tra-POPTICS on data file
+//	g_tra_poptics(strtree, cpu_threads, epsilon, epsilon_prime, min_num_trajectories);
 
 	return 0;
 }

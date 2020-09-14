@@ -12,12 +12,12 @@
 #include <vector>
 #include <string>
 
-
 // Structs
 
 // Trajectory data will be organized as a vector of these points. This will make transfer of data to GPU possible.
 // Trajectory level information will be maintained in a trajectory index if necessary
-struct point{
+struct point
+{
 	int trajectory_number;
 	double x;
 	double y;
@@ -27,9 +27,23 @@ struct point{
 			trajectory_number(trajectory_number), x(x), y(y), t(t){}
 };
 
-// Prototypes
-int load_trajectory_data_from_file(std::string file_name, std::vector<point> &host_trajectory_data);
+struct trajectory_index
+{
+	int 				traj_number;
+	point* 				traj_start;
+	int 				traj_length;
+};
 
-// TODO add SPR-Tree Trajectory index as described in Deng2015.
+struct file_trajectory_data
+{
+	point* 				points;
+	trajectory_index* 	trajectories;
+	int 				num_points;
+	int 				num_trajectories;
+};
+
+// Prototypes
+file_trajectory_data load_trajectory_data_from_file(std::string file_name);
+
 
 #endif /* TRAJECTORY_DATA_CUH_ */

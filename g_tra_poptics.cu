@@ -5,8 +5,7 @@
 #include <stdlib.h>
 #include "g_tra_poptics.cuh"
 
-int g_tra_poptics(std::vector<point> host_trajectory_data, int cpu_threads,
-		double epsilon, double epsilon_prime, int min_num_trajectories)
+int g_tra_poptics(strtree strtree, int cpu_threads, double epsilon, double epsilon_prime, int min_num_trajectories)
 {
 	// Load trajectory data onto GPU
 

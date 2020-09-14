@@ -9,8 +9,23 @@
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <algorithm>
+#include <iostream>
 #include "strtree.cuh"
-//
+
+#define DEBUG true
+
+/**
+ * This macro checks return value of the CUDA runtime call and exits
+ * the application if the call failed.
+ */
+#define CUDA_CHECK_RETURN(value) {											\
+	cudaError_t _m_cudaStat = value;										\
+	if (_m_cudaStat != cudaSuccess) {										\
+		fprintf(stderr, "Error %s at line %d in file %s\n",					\
+				cudaGetErrorString(_m_cudaStat), __LINE__, __FILE__);		\
+		exit(1);															\
+	} }
+
 //__host__ __device__
 //int overlap(RTree_Rect *R, RTree_Rect * S)
 //{
@@ -30,7 +45,7 @@
 //    else
 //        return 1;
 //}
-//
+
 //__host__ __device__
 //int contains(RTree_Rect *R, RTree_Point *P)
 //{
@@ -48,16 +63,18 @@
 //    else
 //        return 0;
 //}
-//
-//__host__ __device__
-//inline void init_boundary(RTree_Rect *bbox)
-//{
-//    bbox->top = ULONG_MAX;
-//    bbox->bottom = -ULONG_MAX;
-//    bbox->left = ULLONG_MAX;
-//    bbox->right = -ULLONG_MAX;
-//}
-//
+
+__host__ __device__
+inline void init_boundary(strtree_rect *bbox)
+{
+    bbox->x1 = DBL_MAX;
+    bbox->x2 = -DBL_MAX;
+    bbox->y1 = DBL_MAX;
+    bbox->y2 = -DBL_MAX;
+    bbox->t1 = DBL_MAX;
+    bbox->t2 = -DBL_MAX;
+}
+
 //__host__ __device__
 //inline void update_boundary(RTree_Rect *bbox, RTree_Rect *node_bbx)
 //{
@@ -70,33 +87,46 @@
 //    //        node_bbx->left, node_bbx->right, bbox->left, bbox->right);
 //
 //}
-//
-//__host__ __device__
-//inline void c_update_boundary(RTree_Rect *bbox, RTree_Point *p)
-//{
-//    bbox->top = min(p->y, bbox->top);
-//    bbox->bottom = max(p->y, bbox->bottom);
-//    bbox->left = min(p->x, bbox->left);
-//    bbox->right = max(p->x, bbox->right);
-//
-//    //printf("x: %llu, bbox: %lu, %lu, %llu, %llu\n", p->x, bbox->top, bbox->bottom, bbox->left, bbox->right);
-//}
-//
-//__host__ __device__
-//inline size_t get_node_length (
-//        const size_t i,
-//        const size_t len_level,
-//        const size_t previous_level_len,
-//        const size_t node_size)
-//{
-//    const size_t n = node_size;
-//    const size_t len = previous_level_len;
-//    const size_t final_i = len_level -1;
-//
-//    // set lnum to len%n if it's the last iteration and there's a remainder, else n
-//    return ((i != final_i || len % n == 0) *n) + ((i == final_i && len % n != 0) * (len % n));
-//}
-//
+
+__host__ __device__
+inline void update_boundary(strtree_rect *bbox, strtree_rect *node_bbx)
+{
+	bbox->x1 = min(node_bbx->x1, bbox->x1);
+	bbox->x2 = max(node_bbx->x2, bbox->x2);
+	bbox->y1 = min(node_bbx->y1, bbox->y1);
+	bbox->y2 = max(node_bbx->y2, bbox->y2);
+	bbox->t1 = min(node_bbx->t1, bbox->t1);
+	bbox->t2 = max(node_bbx->t2, bbox->t2);
+}
+
+__host__ __device__
+inline void c_update_boundary(strtree_rect *bbox, strtree_line *p)
+{
+    bbox->x1 = min(p->line_boundingbox.x1, bbox->x1);
+    bbox->x2 = max(p->line_boundingbox.x2, bbox->x2);
+    bbox->y1 = min(p->line_boundingbox.y1, bbox->y1);
+    bbox->y2 = max(p->line_boundingbox.y2, bbox->y2);
+    bbox->t1 = min(p->line_boundingbox.t1, bbox->t1);
+	bbox->t2 = max(p->line_boundingbox.t2, bbox->t2);
+
+    //printf("x: %llu, bbox: %lu, %lu, %llu, %llu\n", p->x, bbox->top, bbox->bottom, bbox->left, bbox->right);
+}
+
+__host__ __device__
+inline size_t get_node_length (
+        const size_t i,
+        const size_t len_level,
+        const size_t previous_level_len,
+        const size_t node_size)
+{
+    const size_t n = node_size;
+    const size_t len = previous_level_len;
+    const size_t final_i = len_level -1;
+
+    // set lnum to len%n if it's the last iteration and there's a remainder, else n
+    return ((i != final_i || len % n == 0) *n) + ((i == final_i && len % n != 0) * (len % n));
+}
+
 //// points are on device and sorted by x
 //void cuda_sort(RTree_Points *sorted)
 //{
@@ -110,168 +140,277 @@
 //    thrust::sort_by_key(thrust::device, X, X+sorted->length, tbegin);
 //
 //}
-//
-//
-//RTree cuda_create_rtree(RTree_Points points)
-//{
-//    cuda_sort(&points);
-//    RTree_Leaf *leaves = cuda_create_leaves( &points );
-//    const size_t len_leaf = DIV_CEIL(points.length, RTREE_NODE_SIZE);
-//
+
+strtree cuda_create_strtree(strtree_lines lines)
+{
+	// Skip sorting trajectories and lines for now. Not sure how to implement/how it would effect organization.
+    //cuda_sort(&lines);
+
+    strtree_leaf *leaves = cuda_create_leaves( &lines );
+
+    const size_t len_leaf = DIV_CEIL(lines.length, STRTREE_NODE_SIZE);
+
 //    // build rtree from bottom
-//    RTree_Node *level_previous  = (RTree_Node*) leaves;
-//    size_t      len_previous    = len_leaf;
-//    size_t      depth           = 1;    // leaf level: 0
-//    size_t      num_nodes       = len_leaf;
-//    while (len_previous > RTREE_NODE_SIZE)
-//    {
-//        level_previous = cuda_create_level(level_previous, len_previous, depth);
-//        num_nodes += level_previous->num;
-//        len_previous = DIV_CEIL(len_previous, RTREE_NODE_SIZE);
-//        ++depth;
-//    }
+    strtree_node *level_previous  = (strtree_node*) leaves;
+    size_t      len_previous    = len_leaf;
+    size_t      depth           = 1;    // leaf level: 0
+    size_t      num_nodes       = len_leaf;
+    while (len_previous > STRTREE_NODE_SIZE)
+    {
+        level_previous = cuda_create_level(level_previous, len_previous, depth);
+        num_nodes += level_previous->num;
+        len_previous = DIV_CEIL(len_previous, STRTREE_NODE_SIZE);
+        ++depth;
+    }
+
+    // tackle the root node
+    strtree_node *root = new strtree_node();
+    init_boundary(&root->boundingbox);
+    root->num = len_previous;
+    root->children = level_previous;
+    num_nodes += root->num;
+    for (size_t i = 0, end = len_previous; i != end; ++i)
+        update_boundary(&root->boundingbox, &root->children[i].boundingbox);
+    ++depth;
+    root->depth = depth;
+
+    strtree tree = {depth, root};
+
+    if (DEBUG)
+	{
+		std::cout << "Root node at level " << depth << "create_strtree() returns:" << std::endl;
+		strtree_node node = *root;
+		std::cout << "Root node: num=" << node.num << ": depth=" << node.depth
+				<< ": bbox.x1=" << node.boundingbox.x1 << ": bbox.x2=" << node.boundingbox.x2
+				<< ": bbox.y1=" << node.boundingbox.y1 << ": bbox.y2=" << node.boundingbox.y2
+				<< ": bbox.t1=" << node.boundingbox.t1 << ": bbox.t2=" << node.boundingbox.t2 << std::endl;
+		for (int j = 0; j < node.num; j++)
+		{
+			strtree_node child_node = node.children[j];
+			std::cout << "    Child node " << j << ": num=" << child_node.num << ", depth=" << child_node.depth
+				<< ", bbox.x1=" << child_node.boundingbox.x1 << ", bbox.x2=" << child_node.boundingbox.x2
+				<< ", bbox.y1=" << child_node.boundingbox.y1 << ", bbox.y2=" << child_node.boundingbox.y2
+				<< ", bbox.t1=" << child_node.boundingbox.t1 << ", bbox.t2=" << child_node.boundingbox.t2
+				<< std::endl;
+		}
+	}
+
+    return tree;
+}
+
+__global__
+void create_level_kernel
+        (
+            strtree_node *next_level,
+            strtree_node *nodes,
+            strtree_node *real_nodes,
+            const size_t len,
+            size_t depth
+         )
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t next_level_len = DIV_CEIL(len, STRTREE_NODE_SIZE);
+
+    if (i >= next_level_len) return;    // skip the final block remainder
+
+    strtree_node *n = &next_level[i];
+    init_boundary(&n->boundingbox);
+    n->num = get_node_length(i, next_level_len, len, STRTREE_NODE_SIZE);
+    n->children = &real_nodes[i * STRTREE_NODE_SIZE]; // Save host reference to child nodes
+    n->depth = depth;
+    //printf("level num: %d, ---num: %lu\n", n->num, next_level_len);
+
+
+	#pragma unroll
+    for (size_t j = 0, jend = n->num; j != jend; ++j)
+    {
+        update_boundary(&n->boundingbox, &nodes[i * STRTREE_NODE_SIZE + j].boundingbox); // Use device reference to actually access child node
+        //printf("after set node bbox: %lu, %lu, %llu, %llu\n",
+        //    n->bbox.top, n->bbox.bottom, n->bbox.left, n->bbox.right);
+    }
+}
+
+strtree_node* cuda_create_level(strtree_node *nodes, const size_t len, size_t depth)
+{
+    //Should be set somewhere else. const size_t THREADS_PER_BLOCK = 512;
+    const size_t next_level_len = DIV_CEIL(len, STRTREE_NODE_SIZE);
+
+    strtree_node *d_nodes;
+    strtree_node *d_next_level;
+    cudaMalloc( (void**) &d_nodes, len * sizeof(strtree_node) );
+    cudaMalloc( (void**) &d_next_level, next_level_len * sizeof(strtree_node) );
+
+    cudaMemcpy(d_nodes, nodes, len * sizeof(strtree_node), cudaMemcpyHostToDevice);
+
+    create_level_kernel<<< (next_level_len + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>
+            (d_next_level, d_nodes, nodes, len, depth);
+
+    strtree_node *next_level = new strtree_node[next_level_len];
+    cudaMemcpy(next_level, d_next_level, next_level_len * sizeof(strtree_node), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_next_level);
+    cudaFree(d_nodes);
+
+    if (DEBUG)
+	{
+		std::cout << "Level " << depth << " nodes generated on device after transfer back to host, cuda_create_level() returns:" << std::endl;
+		for (int i = 0; i < next_level_len; i++) {
+			strtree_node node = next_level[i];
+			std::cout << "Node: " << i << ": num=" << node.num << ": depth=" << node.depth
+					<< ": bbox.x1=" << node.boundingbox.x1 << ": bbox.x2=" << node.boundingbox.x2
+					<< ": bbox.y1=" << node.boundingbox.y1 << ": bbox.y2=" << node.boundingbox.y2
+					<< ": bbox.t1=" << node.boundingbox.t1 << ": bbox.t2=" << node.boundingbox.t2 << std::endl;
+			for (int j = 0; j < node.num; j++)
+			{
+				strtree_node child_node = node.children[j];
+				std::cout << "    Child node " << j << ": num=" << child_node.num << ", depth=" << child_node.depth
+					<< ", bbox.x1=" << child_node.boundingbox.x1 << ", bbox.x2=" << child_node.boundingbox.x2
+					<< ", bbox.y1=" << child_node.boundingbox.y1 << ", bbox.y2=" << child_node.boundingbox.y2
+					<< ", bbox.t1=" << child_node.boundingbox.t1 << ", bbox.t2=" << child_node.boundingbox.t2
+					<< std::endl;
+			}
+		}
+	}
+
+    return next_level;
+}
+
+// Each thread populates an assigned leaf with entries
+__global__
+void create_leaves_kernel
+        (
+            strtree_leaf    *leaves,
+            strtree_line    *lines,
+            strtree_line    *h_lines,
+            int				*ID,
+            int				*Trajectory_Number,
+            strtree_rect	*Line_BoundingBox,
+            short			*Orientation,
+            size_t			len
+        )
+{
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    const size_t len_leaf = DIV_CEIL(len, STRTREE_NODE_SIZE); // Total number of leaf nodes
+    if (i >= len_leaf) return;  // skip the final block remainder
+
+    // tackle leaf lines
+    strtree_leaf *l = &leaves[i]; // Leaf assigned to this thread
+    init_boundary(&l->boundingbox);
+    l->num = get_node_length(i, len_leaf, len, STRTREE_NODE_SIZE);
+    l->depth = 0;
+    l->lines = &h_lines[i * STRTREE_NODE_SIZE]; // occupy position
+
+    // compute MBR from each point in the node
+	#pragma unroll
+    for (size_t j = 0, jend = l->num; j != jend; ++j)
+    {
+//        // *** use pointer, not value ***/ // *** I am using value, not sure how to use pointer and have update boundary work? ***/
+    	strtree_line *line 		= &lines[i * STRTREE_NODE_SIZE + j];
+        line->id				= ID[i * STRTREE_NODE_SIZE + j];
+        line->line_boundingbox	= Line_BoundingBox[i * STRTREE_NODE_SIZE + j];
+        line->orientation 		= Orientation[i * STRTREE_NODE_SIZE + j];
+        line->trajectory_number = Trajectory_Number[i * STRTREE_NODE_SIZE + j];
+////        p->x     = X[i   * STRTREE_NODE_SIZE + j];
+////        p->y     = Y[i   * STRTREE_NODE_SIZE + j];
+////        p->id    = ID[i  * STRTREE_NODE_SIZE + j];
 //
-//    // tackle the root node
-//    RTree_Node *root = new RTree_Node();
-//    init_boundary(&root->bbox);
-//    root->num = len_previous;
-//    root->children = level_previous;
-//    num_nodes += root->num;
-//    for (size_t i = 0, end = len_previous; i != end; ++i)
-//        update_boundary(&root->bbox, &root->children[i].bbox);
-//    ++depth;
-//    root->depth = depth;
-//
-//    RTree tree = {depth, root};
-//    return tree;
-//}
-//
-//__global__
-//void create_level_kernel
-//        (
-//            RTree_Node *next_level,
-//            RTree_Node *nodes,
-//            RTree_Node *real_nodes,
-//            const size_t len,
-//            size_t depth
-//         )
-//{
-//    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-//    const size_t next_level_len = DIV_CEIL(len, RTREE_NODE_SIZE);
-//
-//    if (i >= next_level_len) return;    // skip the final block remainder
-//
-//    RTree_Node *n = &next_level[i];
-//    init_boundary(&n->bbox);
-//    n->num = get_node_length(i, next_level_len, len, RTREE_NODE_SIZE);
-//    n->children = &real_nodes[i * RTREE_NODE_SIZE];
-//    n->depth = depth;
-//    //printf("level num: %d, ---num: %lu\n", n->num, next_level_len);
-//
-//
-//	#pragma unroll
-//    for (size_t j = 0, jend = n->num; j != jend; ++j)
-//    {
-//        update_boundary(&n->bbox, &nodes[i * RTREE_NODE_SIZE + j].bbox);
-//        //printf("after set node bbox: %lu, %lu, %llu, %llu\n",
-//        //    n->bbox.top, n->bbox.bottom, n->bbox.left, n->bbox.right);
-//    }
-//}
-//
-//RTree_Node* cuda_create_level(RTree_Node *nodes, const size_t len, size_t depth)
-//{
-//    const size_t THREADS_PER_BLOCK = 512;
-//    const size_t next_level_len = DIV_CEIL(len, RTREE_NODE_SIZE);
-//
-//    RTree_Node *d_nodes;
-//    RTree_Node *d_next_level;
-//    cudaMalloc( (void**) &d_nodes, len * sizeof(RTree_Node) );
-//    cudaMalloc( (void**) &d_next_level, next_level_len * sizeof(RTree_Node) );
-//
-//    cudaMemcpy(d_nodes, nodes, len * sizeof(RTree_Node), cudaMemcpyHostToDevice);
-//
-//    create_level_kernel<<< (next_level_len + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>
-//            (d_next_level, d_nodes, nodes, len, depth);
-//
-//    RTree_Node *next_level = new RTree_Node[next_level_len];
-//    cudaMemcpy(next_level, d_next_level, next_level_len * sizeof(RTree_Node), cudaMemcpyDeviceToHost);
-//
-//    cudaFree(d_next_level);
-//    cudaFree(d_nodes);
-//
-//    return next_level;
-//}
-//
-//__global__
-//void create_leaves_kernel
-//        (
-//            RTree_Leaf      *leaves,
-//            RTree_Point     *points,
-//            RTree_Point     *h_points,
-//            uint64          *X,
-//            unsigned long   *Y,
-//            int             *ID,
-//            const size_t    len
-//        )
-//{
-//    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-//
-//    const size_t len_leaf = DIV_CEIL(len, RTREE_NODE_SIZE);
-//    if (i >= len_leaf) return;  // skip the final block remainder
-//
-//    // tackle leaf points
-//    RTree_Leaf *l = &leaves[i];
-//    init_boundary(&l->bbox);
-//    l->num = get_node_length(i, len_leaf, len, RTREE_NODE_SIZE);
-//    l->depth = 0;
-//    l->points = &h_points[i * RTREE_NODE_SIZE]; // occupy position
-//
-//    // compute MBR from each point in the node
-//  #pragma unroll
-//    for (size_t j = 0, jend = l->num; j != jend; ++j)
-//    {
-//        // *** use pointer, not value ***/
-//        RTree_Point *p = &points[i* RTREE_NODE_SIZE + j];
-//        p->x     = X[i   * RTREE_NODE_SIZE + j];
-//        p->y     = Y[i   * RTREE_NODE_SIZE + j];
-//        p->id    = ID[i  * RTREE_NODE_SIZE + j];
-//
-//        //printf("----------id: %d, j: %lu\n", p->id, j);
-//        c_update_boundary(&l->bbox, p);
-//    }
-//}
-//
-//RTree_Leaf* cuda_create_leaves(RTree_Points *sorted)
-//{
-//    const size_t THREADS_PER_BLOCK = 512;
-//
-//    const size_t len = sorted->length;
-//    const size_t num_leaf = DIV_CEIL(len, RTREE_NODE_SIZE);
-//
-//    RTree_Leaf  *d_leaves;
-//    RTree_Point *d_points;
-//
-//    cudaMalloc( (void**) &d_leaves, num_leaf    * sizeof(RTree_Leaf) );
-//    cudaMalloc( (void**) &d_points, len         * sizeof(RTree_Point) );
-//
-//    // points on host will be passed to kernel and only occupy the position
-//    RTree_Point *points = new RTree_Point[len];
-//
-//    create_leaves_kernel<<< (num_leaf + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK >>>
-//        (d_leaves, d_points, points, sorted->X, sorted->Y, sorted->ID, len);
-//
-//    RTree_Leaf  *leaves = new RTree_Leaf[num_leaf];
-//
-//    // copy points from device to host
-//    cudaMemcpy(leaves, d_leaves, num_leaf   * sizeof(RTree_Leaf), cudaMemcpyDeviceToHost);
-//    cudaMemcpy(points, d_points, len        * sizeof(RTree_Point), cudaMemcpyDeviceToHost);
-//
-//    cudaFree(d_leaves);
-//    cudaFree(d_points);
-//
-//    return leaves;
-//
-//}
+//        //printf("----------id: %d, j: %lu\n", line->id, j);
+        c_update_boundary(&l->boundingbox, line);
+    }
+}
+
+strtree_leaf* cuda_create_leaves(strtree_lines *sorted_lines)
+{
+    const size_t len = sorted_lines->length;
+    const size_t num_leaf = DIV_CEIL(len, STRTREE_NODE_SIZE);
+
+    strtree_leaf  *d_leaves;
+    strtree_line  *d_lines;
+    int *d_ID;
+    int *d_Trajectory_Number;
+    strtree_rect *d_Line_BoundingBox;
+    short *d_Orientation;
+
+    if (DEBUG) { std::cout <<"Starting cudaMalloc for creating leaves" << std::endl; }
+
+    cudaMalloc( (void**) &d_leaves, num_leaf    * sizeof(strtree_leaf) );
+    cudaMalloc( (void**) &d_lines, len          * sizeof(strtree_line) );
+
+    if (DEBUG) { std::cout <<"Starting cudaMalloc for sorted_lines contents" << std::endl; }
+
+    // Move a copy of sorted_lines to the device so the device can see the data
+    if (DEBUG) { std::cout <<"Starting cudaMalloc for d_ID" << std::endl; }
+    CUDA_CHECK_RETURN(cudaMalloc( (void**) &d_ID, len * sizeof(int)));
+    if (DEBUG) { std::cout <<"Starting cudaMemcpy for d_ID" << std::endl; }
+    CUDA_CHECK_RETURN(cudaMemcpy(d_ID, sorted_lines->ID, len * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK_RETURN(cudaMalloc( (void**) &d_Trajectory_Number, len * sizeof(int)));
+    CUDA_CHECK_RETURN(cudaMemcpy(d_Trajectory_Number, sorted_lines->Trajectory_Number, len * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK_RETURN(cudaMalloc( (void**) &d_Line_BoundingBox, len * sizeof(strtree_rect)));
+    CUDA_CHECK_RETURN(cudaMemcpy(d_Line_BoundingBox, sorted_lines->Line_BoundingBox, len * sizeof(strtree_rect), cudaMemcpyHostToDevice));
+    CUDA_CHECK_RETURN(cudaMalloc( (void**) &d_Orientation, len * sizeof(short)));
+    CUDA_CHECK_RETURN(cudaMemcpy(d_Orientation, sorted_lines->Orientation, len * sizeof(short), cudaMemcpyHostToDevice));
+	//d_sorted_lines->length = sorted_lines->length;
+
+    if (DEBUG) { std::cout <<"Finished cudaMalloc and memcpy for sorted_lines sorted_lines contents" << std::endl; }
+
+    // Leaves on device will copy lines into here this host array and maintain pointers to positions in this array
+    strtree_line *lines = new strtree_line[len];
+
+    if (DEBUG) { std::cout <<"Launching create_leaves_kernel" << std::endl; }
+
+    create_leaves_kernel<<< (num_leaf + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK >>>
+        (d_leaves, d_lines, lines, d_ID, d_Trajectory_Number, d_Line_BoundingBox, d_Orientation, sorted_lines->length);
+
+    if (DEBUG) { std::cout <<"Finished create_leaves_kernel" << std::endl; }
+
+    strtree_leaf  *leaves = new strtree_leaf[num_leaf];
+
+    // copy points from device to host
+    cudaMemcpy(leaves, d_leaves, num_leaf   * sizeof(strtree_leaf), cudaMemcpyDeviceToHost);
+    cudaMemcpy(lines, d_lines, len        * sizeof(strtree_line), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_leaves);
+    cudaFree(d_lines);
+    cudaFree(d_ID);
+    cudaFree(d_Trajectory_Number);
+    cudaFree(d_Line_BoundingBox);
+    cudaFree(d_Orientation);
+
+    if (DEBUG)
+	{
+    	std::cout << "Lines copied from device point to the following lines now on host" << std::endl;
+		for(int i = 0; i < len; i++)
+		{
+			strtree_line line = lines[i];
+			std::cout << "Line " << i << ": id=" << line.id << ", trajectory_number=" << line.trajectory_number
+					<< ", bbox.x1=" << line.line_boundingbox.x1 << ", bbox.x2=" << line.line_boundingbox.x2
+					<< ", bbox.y1=" << line.line_boundingbox.y1 << ", bbox.y2=" << line.line_boundingbox.y2
+					<< ", bbox.t1=" << line.line_boundingbox.t1 << ", bbox.t2=" << line.line_boundingbox.t2
+					<< ", orientation=" << line.orientation << std::endl;
+		}
+		std::cout << "Leaves generated on device after transfer back to host:" << std::endl;
+		for (int i = 0; i < num_leaf; i++) {
+			strtree_leaf leaf = leaves[i];
+			std::cout << "Leaf " << i << ": num=" << leaf.num << ": depth=" << leaf.depth
+					<< ": bbox.x1=" << leaf.boundingbox.x1 << ": bbox.x2=" << leaf.boundingbox.x2
+					<< ": bbox.y1=" << leaf.boundingbox.y1 << ": bbox.y2=" << leaf.boundingbox.y2
+					<< ": bbox.t1=" << leaf.boundingbox.t1 << ": bbox.t2=" << leaf.boundingbox.t2 << std::endl;
+    		for (int j = 0; j < leaf.num; j++)
+    		{
+    			strtree_line line = leaf.lines[j];
+    			std::cout << "    Child line " << j << ": id=" << line.id << ", trajectory_number=" << line.trajectory_number
+					<< ", bbox.x1=" << line.line_boundingbox.x1 << ", bbox.x2=" << line.line_boundingbox.x2
+					<< ", bbox.y1=" << line.line_boundingbox.y1 << ", bbox.y2=" << line.line_boundingbox.y2
+					<< ", bbox.t1=" << line.line_boundingbox.t1 << ", bbox.t2=" << line.line_boundingbox.t2
+					<< ", orientation=" << line.orientation << std::endl;
+    		}
+		}
+	}
+
+    return leaves;
+
+}
 //
 //int cpu_search(RTree_Node *N, RTree_Rect *rect, std::vector<int> &points)
 //{
@@ -394,7 +533,7 @@
 //
 //            // starting index of child in array
 //            if (i == 0)
-//                h_edges[i] = RTREE_NODE_SIZE;
+//                h_edges[i] = STRTREE_NODE_SIZE;
 //            else
 //                h_edges[i] = n->num;
 //
@@ -430,11 +569,11 @@
 //    }
 //
 //}
-//
+
 //RTree_Points cuda_search(RTree *tree, std::vector<RTree_Rect> rect_vec)
 //{
 //    CUDA_RTree_Node *   h_nodes = (CUDA_RTree_Node *) malloc(tree->num * sizeof(CUDA_RTree_Node));
-//    int *               h_edges = (int *) malloc(tree->num * sizeof(int) * RTREE_NODE_SIZE);
+//    int *               h_edges = (int *) malloc(tree->num * sizeof(int) * STRTREE_NODE_SIZE);
 //    RTree_Rect      *   h_rects = (RTree_Rect *) malloc(tree->num * sizeof(RTree_Rect));
 //
 //    int node_id = 0;
@@ -455,3 +594,129 @@
 //
 //    return points;
 //}
+
+strtree_lines points_to_lines(point* points, trajectory_index* trajectory_indices, int num_points, int num_trajectories)
+{
+	// Want to create the following struct given information from a file.
+	//	struct strtree_lines
+	//	{
+	//		int 		*ID;
+	//		int 		*Trajectory_Number;
+	//
+	//		strtree_rect *Line_BoundingBox;
+	//
+	//		short *Orientation;
+	//
+	//		size_t length;
+	//	};
+
+	// Each trajectory has 1 fewer lines than points.
+	size_t num_lines = num_points - num_trajectories;
+
+	int *ID = new int[num_lines];
+	int *cur_ID = ID;
+	int id = 0;
+	int *Trajectory_Number = new int[num_lines];
+	int *cur_Trajectory_Number = Trajectory_Number;
+	strtree_rect *Line_BoundingBox = new strtree_rect[num_lines];
+	strtree_rect *cur_Line_BoundingBox = Line_BoundingBox;
+	short *Orientation = new short[num_lines];
+	short *cur_Orientation = Orientation;
+
+	point last_point = points[0];
+	point this_point;
+	for (int i = 1; i < num_points; i++) //TODO do this work using a GPU kernel
+	{
+		this_point = points[i];
+
+		if(DEBUG)
+		{
+			std::cout << "Adding line between points:" << std::endl;
+			std::cout << "Traj_num: " << last_point.trajectory_number << " x: " << last_point.x << " y: " << last_point.y << " t: " << last_point.t << std::endl;
+			std::cout << "Traj_num: " << this_point.trajectory_number << " x: " << this_point.x << " y: " << this_point.y << " t: " << this_point.t << std::endl;
+		}
+
+		if (last_point.trajectory_number != this_point.trajectory_number)
+		{
+			// We are now on a new trajectory. Don't add another line
+			last_point = this_point;
+			continue;
+		}
+
+		// Create a line between last point and this point.
+		*cur_ID = id;
+		*cur_Trajectory_Number = this_point.trajectory_number;
+		*cur_Line_BoundingBox = points_to_bbox(last_point, this_point);
+		*cur_Orientation = points_to_orientation(last_point, this_point);
+
+		// Set up for next execution of the for loop
+		cur_ID++;
+		id++;
+		cur_Trajectory_Number++;
+		cur_Line_BoundingBox++;
+		cur_Orientation++;
+		last_point = this_point;
+	}
+
+	if (DEBUG)
+	{
+		std::cout << "Contents of strtree_lines lines returned by points_to_lines()" << std::endl;
+		for(int i = 0; i < num_lines; i++)
+		{
+			std::cout << "Line " << i << ": id=" << ID[i] << ", trajectory_number=" << Trajectory_Number[i]
+					<< ", bbox.x1=" << Line_BoundingBox[i].x1 << ", bbox.x2=" << Line_BoundingBox[i].x2
+					<< ", bbox.y1=" << Line_BoundingBox[i].y1 << ", bbox.y2=" << Line_BoundingBox[i].y2
+					<< ", bbox.t1=" << Line_BoundingBox[i].t1 << ", bbox.t2=" << Line_BoundingBox[i].t2
+					<< ", orientation=" << Orientation[i] << std::endl;
+		}
+	}
+
+	strtree_lines lines = {ID, Trajectory_Number, Line_BoundingBox, Orientation, num_lines};
+	return lines;
+}
+
+strtree_rect points_to_bbox(point p1, point p2)
+{
+	strtree_rect rect;
+	rect.x1 = min(p1.x, p2.x);
+	rect.x2 = max(p1.x, p2.x);
+	rect.y1 = min(p1.y, p2.y);
+	rect.y2 = max(p1.y, p2.y);
+	rect.t1 = min(p1.t, p2.t);
+	rect.t2 = max(p1.t, p2.t);
+	return rect;
+}
+
+short points_to_orientation(point p1, point p2)
+{
+	/** Recall:
+	 * orientation indicates how the line represented by the entry is represented by the bounding box above
+	 * Since trajectories move forward in time, first point is always t1, second t2.
+	 * 0: (x1,y1) to (x2,y2)
+	 * 1: (x1,y2) to (x2,y1)
+	 * 2: (x2,y1) to (x1,y2)
+	 * 3: (x2,y2) to (x1,y1)
+	 */
+	if (p1.x < p2.x)
+	{
+		if (p1.y < p2.y)
+		{
+			return 0;
+		}
+		else
+		{
+			return 1;
+		}
+	}
+	else
+	{
+		if (p1.y < p2.y)
+		{
+			return 2;
+		}
+		else
+		{
+			return 3;
+		}
+	}
+}
