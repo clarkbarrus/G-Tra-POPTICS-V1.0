@@ -141,7 +141,7 @@ inline size_t get_node_length (
 //
 //}
 
-strtree cuda_create_strtree(strtree_lines lines)
+host_strtree cuda_create_host_strtree(strtree_lines lines)
 {
 	// Skip sorting trajectories and lines for now. Not sure how to implement/how it would effect organization.
     //cuda_sort(&lines);
@@ -174,7 +174,17 @@ strtree cuda_create_strtree(strtree_lines lines)
     ++depth;
     root->depth = depth;
 
-    strtree tree = {depth, root};
+    host_strtree tree = {depth, root};
+    //    size_t      len_previous    = len_leaf;
+    //    size_t      depth           = 1;    // leaf level: 0
+    //    size_t      num_nodes       = len_leaf;
+    //    while (len_previous > STRTREE_NODE_SIZE)
+    //    {
+    //        level_previous = cuda_create_level(level_previous, len_previous, depth);
+    //        num_nodes += level_previous->num;
+    //        len_previous = DIV_CEIL(len_previous, STRTREE_NODE_SIZE);
+    //        ++depth;
+    //    }
 
     if (DEBUG)
 	{
@@ -194,6 +204,67 @@ strtree cuda_create_strtree(strtree_lines lines)
 				<< std::endl;
 		}
 	}
+
+    return tree;
+}
+
+
+strtree cuda_create_strtree(thrust::host_vector<strtree_line> h_lines)
+{
+	// Skip sorting trajectories and lines for now. Not sure how to implement/how it would effect organization.
+    //cuda_sort(&lines);
+
+//    strtree_leaf *leaves = cuda_create_leaves( &lines );
+
+//    const size_t len_leaf = DIV_CEIL(lines.length, STRTREE_NODE_SIZE);
+
+    thrust::device_vector<strtree_line> d_lines = h_lines;
+    thrust::device_vector<strtree_node> d_nodes(2);
+
+//    // build rtree from bottom
+//    strtree_node *level_previous  = (strtree_node*) leaves;
+//    size_t      len_previous    = len_leaf;
+//    size_t      depth           = 1;    // leaf level: 0
+//    size_t      num_nodes       = len_leaf;
+//    while (len_previous > STRTREE_NODE_SIZE)
+//    {
+//        level_previous = cuda_create_level(level_previous, len_previous, depth);
+//        num_nodes += level_previous->num;
+//        len_previous = DIV_CEIL(len_previous, STRTREE_NODE_SIZE);
+//        ++depth;
+//    }
+
+    // tackle the root node
+    size_t root_offset = 0;
+//    init_boundary(&root->boundingbox);
+//    root->num = len_previous;
+//    root->children = level_previous;
+//    num_nodes += root->num;
+//    for (size_t i = 0, end = len_previous; i != end; ++i)
+//        update_boundary(&root->boundingbox, &root->children[i].boundingbox);
+//    ++depth;
+//    root->depth = depth;
+
+    strtree tree = {root_offset, d_nodes, d_lines};
+//
+//    if (DEBUG)
+//	{
+//		std::cout << "Root node at level " << depth << "create_strtree() returns:" << std::endl;
+//		strtree_node node = *root;
+//		std::cout << "Root node: num=" << node.num << ": depth=" << node.depth
+//				<< ": bbox.x1=" << node.boundingbox.x1 << ": bbox.x2=" << node.boundingbox.x2
+//				<< ": bbox.y1=" << node.boundingbox.y1 << ": bbox.y2=" << node.boundingbox.y2
+//				<< ": bbox.t1=" << node.boundingbox.t1 << ": bbox.t2=" << node.boundingbox.t2 << std::endl;
+//		for (int j = 0; j < node.num; j++)
+//		{
+//			strtree_node child_node = node.children[j];
+//			std::cout << "    Child node " << j << ": num=" << child_node.num << ", depth=" << child_node.depth
+//				<< ", bbox.x1=" << child_node.boundingbox.x1 << ", bbox.x2=" << child_node.boundingbox.x2
+//				<< ", bbox.y1=" << child_node.boundingbox.y1 << ", bbox.y2=" << child_node.boundingbox.y2
+//				<< ", bbox.t1=" << child_node.boundingbox.t1 << ", bbox.t2=" << child_node.boundingbox.t2
+//				<< std::endl;
+//		}
+//	}
 
     return tree;
 }
@@ -672,6 +743,68 @@ strtree_lines points_to_lines(point* points, trajectory_index* trajectory_indice
 	}
 
 	strtree_lines lines = {ID, Trajectory_Number, Line_BoundingBox, Orientation, num_lines};
+	return lines;
+}
+
+// V2.0 of points to lines. This is the iteration of the data structure using offsets and vector instead of arrays & pointers.
+thrust::host_vector<strtree_line> points_to_line_vector(
+		point* points, trajectory_index* trajectory_indices, int num_points, int num_trajectories)
+{
+	// Want to create an vector of strtree_line structs
+	//	std::vector<strtree_line> lines
+
+	// Each trajectory has 1 fewer lines than points.
+	size_t num_lines = num_points - num_trajectories;
+
+	thrust::host_vector<strtree_line> lines(num_lines);
+	int id = 0; // Use line id as an index tracking which line we are on.
+
+	point last_point = points[0];
+	point this_point;
+	for (int i = 1; i < num_points; i++) //TODO do this work using a GPU kernel
+	{
+		this_point = points[i];
+
+		if(DEBUG)
+		{
+			std::cout << "Adding line between points:" << std::endl;
+			std::cout << "Traj_num: " << last_point.trajectory_number << " x: " << last_point.x << " y: " << last_point.y << " t: " << last_point.t << std::endl;
+			std::cout << "Traj_num: " << this_point.trajectory_number << " x: " << this_point.x << " y: " << this_point.y << " t: " << this_point.t << std::endl;
+		}
+
+		if (last_point.trajectory_number != this_point.trajectory_number)
+		{
+			// We are now on a new trajectory. Don't add another line
+			last_point = this_point;
+			continue;
+		}
+
+		strtree_line *line = &lines[id];
+
+		// Create a line between last point and this point.
+		line->id = id;
+		line->trajectory_number = this_point.trajectory_number;
+		line->line_boundingbox = points_to_bbox(last_point, this_point);
+		line->orientation = points_to_orientation(last_point, this_point);
+
+		// Set up for next execution of the for loop
+		id++;
+		last_point = this_point;
+	}
+
+	if (DEBUG)
+	{
+		std::cout << "Contents of vector<strtree_line> lines returned by points_to_line_vector()" << std::endl;
+		for(int i = 0; i < num_lines; i++)
+		{
+			std::cout << "Line " << i << ": id=" << lines[i].id << ", trajectory_number=" << lines[i].trajectory_number
+					<< ", bbox.x1=" << lines[i].line_boundingbox.x1 << ", bbox.x2=" << lines[i].line_boundingbox.x2
+					<< ", bbox.y1=" << lines[i].line_boundingbox.y1 << ", bbox.y2=" << lines[i].line_boundingbox.y2
+					<< ", bbox.t1=" << lines[i].line_boundingbox.t1 << ", bbox.t2=" << lines[i].line_boundingbox.t2
+					<< ", orientation=" << lines[i].orientation << std::endl;
+		}
+	}
+
 	return lines;
 }
 

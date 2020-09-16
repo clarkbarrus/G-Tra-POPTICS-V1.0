@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 	// Preprocessing: build STR-tree index
 	strtree_lines lines = points_to_lines(trajectory_data.points, trajectory_data.trajectories,
 			trajectory_data.num_points, trajectory_data.num_trajectories);
-	strtree strtree = cuda_create_strtree(lines);
+	host_strtree strtree = cuda_create_host_strtree(lines);
 
 //	/* Initialize variables for G-Tra-POPTICS execution */
 //	// Number of CPU threads executing

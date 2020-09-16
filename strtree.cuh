@@ -10,6 +10,7 @@
 
 #include <stdlib.h>
 #include <vector>
+#include <thrust/device_vector.h>
 #include "trajectory_data.cuh"
 
 //#include "s2/base/integral_types.h"
@@ -27,7 +28,8 @@ struct strtree_rect
 };
 
 /**
- * STRTree_Point represents a single entry in an STR tree and is actually a line.
+ * STRTree_Point represents a sin#include <thrust/device_vector.h>
+ * gle entry in an STR tree and is actually a line.
  * The entry contains a bounding box for the line and the orientation of the bounding box in space.
  */
 struct strtree_line
@@ -73,11 +75,19 @@ struct strtree_lines
 //#define MAX_THREADS_PER_BLOCK   100
 
 struct strtree_node;
-struct strtree
+struct host_strtree
 {
     size_t          depth;   	// know where the leaves begin
     strtree_node   *  root; 	// First node in the str tree
     size_t          num_nodes;	// Number of nodes in str tree
+};
+
+struct strtree
+{
+		size_t root_offset;
+		thrust::device_vector<strtree_node> nodes;
+
+		thrust::device_vector<strtree_line> lines;
 };
 
 
@@ -91,12 +101,29 @@ struct strtree_leaf
 
 };
 
+struct strtree_offset_leaf
+{
+    strtree_rect    boundingbox;// Bounding box containing all of the children
+    size_t          num;        // number of child lines
+    size_t          depth;      // level. Should be 0. This is a leaf. :P
+    size_t			first_child_line_offset;		// line entries in leaf node
+
+};
+
 struct strtree_node
 {
     strtree_rect      boundingbox;
     size_t          num;		// number of children
     size_t          depth;		// node level
-    strtree_node *    children; 	// pointers to childen nodes
+    strtree_node *    children; 	// pointers to children nodes
+};
+
+struct strtree_offset_node
+{
+    strtree_rect    boundingbox;
+    size_t          num;		// number of children
+    size_t          depth;		// node level, 0 Indicates a leaf node
+    size_t			first_child_offset; 	// Offsets of children nodes
 };
 
 //struct CUDA_RTree_Node
@@ -113,13 +140,14 @@ struct strtree_node
 void cuda_sort(strtree_lines *lines);
 
 // Creates an STR tree from lines using a Cuda low-x1 bulk loading procedure
+host_strtree cuda_create_host_strtree(strtree_lines lines);
 strtree cuda_create_strtree(strtree_lines lines);
 
 // Helper methods for low-x1 bulk loading procedure
 strtree_leaf* cuda_create_leaves(strtree_lines *sorted);
 strtree_node* cuda_create_level(strtree_node *nodes, const size_t len, size_t depth);
 
-// Creates an STR tree serially using the insert method found in Pfoser2000 STR Tree paper
+/*// Creates an STR tree serially using the insert method found in Pfoser2000 STR Tree paper
 strtree serial_create_strtree(strtree_lines lines);
 
 // Helper methods for serial strtree construction
@@ -128,9 +156,11 @@ void split();
 void findnode();
 void chooseleaf();
 void quadraticsplit();
-void adjusttree();
+void adjusttree();*/
 
 strtree_lines points_to_lines(point* points, trajectory_index* trajectory_indices, int num_points, int num_trajectories);
+thrust::host_vector<strtree_line> points_to_line_vector(
+		point* points, trajectory_index* trajectory_indices, int num_points, int num_trajectories);
 
 // Helper methods for points_to_lines
 strtree_rect points_to_bbox(point p1, point p2);
