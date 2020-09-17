@@ -6,6 +6,7 @@
  */
 
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include <algorithm>
@@ -127,19 +128,75 @@ inline size_t get_node_length (
     return ((i != final_i || len % n == 0) *n) + ((i == final_i && len % n != 0) * (len % n));
 }
 
-//// points are on device and sorted by x
-//void cuda_sort(RTree_Points *sorted)
-//{
-//    uint64 *X = sorted->X;
-//    unsigned long *Y = sorted->Y;
-//    int *ID = sorted->ID;
-//
-//    // sort by x
-//    auto tbegin = thrust::make_zip_iterator(thrust::make_tuple(Y, ID));
-//    auto tend = thrust::make_zip_iterator(thrust::make_tuple(Y+sorted->length, ID+sorted->length));
-//    thrust::sort_by_key(thrust::device, X, X+sorted->length, tbegin);
-//
-//}
+__global__
+void create_level_kernel
+		(
+			strtree_offset_node *d_nodes,
+			size_t parent_start_offset,
+			size_t parent_end_offset,
+			size_t child_start_offset,
+			size_t child_end_offset,
+			size_t depth
+		)
+{
+	// Thread should execute for each node in d_parent_nodes
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; //Use grid stride loop strategy
+	         i < parent_end_offset - parent_start_offset;
+	         i += blockDim.x * gridDim.x)
+	{
+		strtree_offset_node node;
+		node.first_child_offset = child_start_offset + i * STRTREE_NODE_SIZE;
+		node.num = get_node_length(i, parent_end_offset - parent_start_offset, child_end_offset - child_start_offset, STRTREE_NODE_SIZE);
+		node.depth = depth;
+
+		// Update node's bbox
+	    init_boundary(&node.boundingbox);
+		#pragma unroll //TODO Consider data coalescing here
+		for (size_t j = 0, jend = node.num; j != jend; ++j)
+		{
+			 // Using device references to actually access child node
+			update_boundary(&node.boundingbox, &d_nodes[node.first_child_offset + j].boundingbox);
+
+		}
+
+		// Write resulting node
+		d_nodes[i + parent_start_offset] = node;
+	}
+}
+
+__global__
+void create_leaves_kernel
+		(
+			strtree_line *d_lines,
+			size_t lines_start_offset,
+			size_t lines_end_offset,
+			strtree_offset_node *d_nodes,
+			size_t nodes_start_offset,
+			size_t nodes_end_offset)
+{
+	// Thread should execute for each node in d_parent_nodes
+		for (int i = blockIdx.x * blockDim.x + threadIdx.x; //Use grid stride loop strategy
+		         i < nodes_end_offset - nodes_start_offset;
+		         i += blockDim.x * gridDim.x)
+		{
+			strtree_offset_node node;
+			node.first_child_offset = lines_start_offset + i * STRTREE_NODE_SIZE;
+			node.num = get_node_length(i, nodes_end_offset - nodes_start_offset, lines_end_offset - lines_start_offset, STRTREE_NODE_SIZE);
+			node.depth = 0;
+
+			// Update node's bbox
+		    init_boundary(&node.boundingbox);
+			#pragma unroll //TODO Consider data coalescing here
+			for (size_t j = 0, jend = node.num; j != jend; ++j)
+			{
+				 // Using device references to actually access child node
+				update_boundary(&node.boundingbox, &d_lines[node.first_child_offset + j].line_boundingbox);
+			}
+
+			// Write resulting node
+			d_nodes[i + nodes_start_offset] = node;
+		}
+}
 
 host_strtree cuda_create_host_strtree(strtree_lines lines)
 {
@@ -214,39 +271,63 @@ strtree cuda_create_strtree(thrust::host_vector<strtree_line> h_lines)
 	// Skip sorting trajectories and lines for now. Not sure how to implement/how it would effect organization.
     //cuda_sort(&lines);
 
-//    strtree_leaf *leaves = cuda_create_leaves( &lines );
+    // Calculate number of nodes in tree and tree height
+    thrust::host_vector<size_t> level_offsets(1);
+    level_offsets.push_back(0); //Tree leaves will start at 0
+    size_t level_num_nodes = DIV_CEIL(h_lines.size(), STRTREE_NODE_SIZE);
+    size_t total_num_nodes = 0 + level_num_nodes;
 
-//    const size_t len_leaf = DIV_CEIL(lines.length, STRTREE_NODE_SIZE);
+    while (level_num_nodes > 1)
+    {
+    	level_offsets.push_back(total_num_nodes);
+    	level_num_nodes = DIV_CEIL(level_num_nodes, STRTREE_NODE_SIZE);
+    	total_num_nodes += level_num_nodes;
+    }
 
+    const size_t tree_size = total_num_nodes;
+
+	// Move lines to device
     thrust::device_vector<strtree_line> d_lines = h_lines;
-    thrust::device_vector<strtree_node> d_nodes(2);
+    strtree_line *d_lines_ptr = (strtree_line*)thrust::raw_pointer_cast(d_lines.data());
+    thrust::device_vector<strtree_offset_node> d_nodes(tree_size);
+    strtree_offset_node *d_nodes_ptr = (strtree_offset_node*)thrust::raw_pointer_cast(d_nodes.data());
 
-//    // build rtree from bottom
-//    strtree_node *level_previous  = (strtree_node*) leaves;
-//    size_t      len_previous    = len_leaf;
-//    size_t      depth           = 1;    // leaf level: 0
-//    size_t      num_nodes       = len_leaf;
-//    while (len_previous > STRTREE_NODE_SIZE)
-//    {
-//        level_previous = cuda_create_level(level_previous, len_previous, depth);
-//        num_nodes += level_previous->num;
-//        len_previous = DIV_CEIL(len_previous, STRTREE_NODE_SIZE);
-//        ++depth;
-//    }
+    // Leaves first
+    size_t num_leaves = DIV_CEIL(h_lines.size(), STRTREE_NODE_SIZE);
+    create_leaves_kernel<<< (num_leaves + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>
+    					(d_lines_ptr, 0, d_lines.size(),
+						 d_nodes_ptr, 0, num_leaves);
 
-    // tackle the root node
-    size_t root_offset = 0;
-//    init_boundary(&root->boundingbox);
-//    root->num = len_previous;
-//    root->children = level_previous;
-//    num_nodes += root->num;
-//    for (size_t i = 0, end = len_previous; i != end; ++i)
-//        update_boundary(&root->boundingbox, &root->children[i].boundingbox);
-//    ++depth;
-//    root->depth = depth;
+    // Build strtree from bottom
+    size_t depth = 1;
+    for(int i = 1; i < level_offsets.size(); i++)
+    {
+    	// This level has how many leaves?
+    	if (i == level_offsets.size() - 1)
+    	{
+    		level_num_nodes = 1;
+    	}
+    	else
+    	{
+    		level_num_nodes = level_offsets[i+1] - level_offsets[i];
+    	}
+
+    	/**
+    	 * For each node on this layer we want to
+    	 * 1. Record the offset of the first node child
+    	 * 2. Record the number of children
+    	 * 3. Update the bounding box of the node based on each of the children
+    	 */
+    	create_level_kernel<<<(level_num_nodes + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>
+    			(d_nodes_ptr, level_offsets[i], level_offsets[i]+level_num_nodes, level_offsets[i-1], level_offsets[i], depth);
+
+    	depth++;
+    }
+
+    size_t root_offset = d_nodes.size() -1;
 
     strtree tree = {root_offset, d_nodes, d_lines};
-//
+
 //    if (DEBUG)
 //	{
 //		std::cout << "Root node at level " << depth << "create_strtree() returns:" << std::endl;
@@ -300,6 +381,7 @@ void create_level_kernel
         //    n->bbox.top, n->bbox.bottom, n->bbox.left, n->bbox.right);
     }
 }
+
 
 strtree_node* cuda_create_level(strtree_node *nodes, const size_t len, size_t depth)
 {

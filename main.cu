@@ -44,9 +44,21 @@ int main(int argc, char **argv)
 	file_trajectory_data trajectory_data = load_trajectory_data_from_file(file_name);
 
 	// Preprocessing: build STR-tree index
-	strtree_lines lines = points_to_lines(trajectory_data.points, trajectory_data.trajectories,
+	thrust::host_vector<strtree_line> lines = points_to_line_vector(trajectory_data.points, trajectory_data.trajectories,
 			trajectory_data.num_points, trajectory_data.num_trajectories);
-	host_strtree strtree = cuda_create_host_strtree(lines);
+	strtree strtree = cuda_create_strtree(lines);
+
+	thrust::host_vector<strtree_offset_node> nodes = strtree.nodes;
+
+	for(int i = 0; i < nodes.size(); i++)
+	{
+		strtree_offset_node node = nodes[i];
+		std::cout << "Node " << i << ": num children=" << node.num << ", depth=" << node.depth << ", child_offset=" <<node.first_child_offset
+			<< ", bbox.x1=" << node.boundingbox.x1 << ", bbox.x2=" << node.boundingbox.x2
+			<< ", bbox.y1=" << node.boundingbox.y1 << ", bbox.y2=" << node.boundingbox.y2
+			<< ", bbox.t1=" << node.boundingbox.t1 << ", bbox.t2=" << node.boundingbox.t2
+			<< std::endl;
+	}
 
 //	/* Initialize variables for G-Tra-POPTICS execution */
 //	// Number of CPU threads executing

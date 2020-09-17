@@ -82,10 +82,11 @@ struct host_strtree
     size_t          num_nodes;	// Number of nodes in str tree
 };
 
+struct strtree_offset_node;
 struct strtree
 {
 		size_t root_offset;
-		thrust::device_vector<strtree_node> nodes;
+		thrust::device_vector<strtree_offset_node> nodes;
 
 		thrust::device_vector<strtree_line> lines;
 };
@@ -141,11 +142,13 @@ void cuda_sort(strtree_lines *lines);
 
 // Creates an STR tree from lines using a Cuda low-x1 bulk loading procedure
 host_strtree cuda_create_host_strtree(strtree_lines lines);
-strtree cuda_create_strtree(strtree_lines lines);
 
 // Helper methods for low-x1 bulk loading procedure
 strtree_leaf* cuda_create_leaves(strtree_lines *sorted);
 strtree_node* cuda_create_level(strtree_node *nodes, const size_t len, size_t depth);
+
+// Second version creating STR tree using thrust vectors and offsets.
+strtree cuda_create_strtree(thrust::host_vector<strtree_line> h_lines);
 
 /*// Creates an STR tree serially using the insert method found in Pfoser2000 STR Tree paper
 strtree serial_create_strtree(strtree_lines lines);
